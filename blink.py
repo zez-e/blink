@@ -1,9 +1,11 @@
-from os.path import exists
+from os.path import exists, isfile, join
+from os import listdir
 from blinkpy.blinkpy import Blink
 from blinkpy.auth import Auth
 from blinkpy.helpers.util import json_load
-from blinkpy.api import request_videos
+from blinkpy.api import request_videos,http_get
 from dateutil.parser import parse
+from shutil import copyfileobj
 from blinkpy.helpers.constants import (
     DEFAULT_MOTION_INTERVAL,
     DEFAULT_REFRESH,
@@ -12,47 +14,72 @@ from blinkpy.helpers.constants import (
 )
 
 import json
+import os.path
 
 TMP_PATH = "./tmp/"
+CURRRENT_PATH = "./current/"
 AUTHFILE = "./auth.json"
-MOST_RECENT_VIDEO_PATH = "./mostRecent.json"
-HARD_PAGE_LIMIT = 10
-
-mostRecentVideo = dict()
+HARD_PAGE_LIMIT = 2
 
 
+def get_date_for_most_recent_by_camera_media_file(blink, path=CURRRENT_PATH):
+	most_recent = dict()
+	onlyfiles = [f for f in listdir(path) if isfile(join(path, f))]
+	for file in onlyfiles:
+		file = file.strip(".mp4").split("+")
+		camera_name = file[0]
+		created_at = file[1]
+		most_recent[camera_name] = created_at
+	for name, camera in blink.cameras.items():
+		if name not in most_recent:
+			most_recent[name] = "1970-01-01T12:00:00"
+	return most_recent
 
-def download_latest_videos(blink,path,since="2021-12-20 12:00", stop=10, delay=1):
+		
+
+def download_latest_videos(blink,path,since="1970-01-01 12:00"):
 	parsed_datetime = parse(since, fuzzy=True)
 	since_epochs = parsed_datetime.timestamp()
+	mostRecentVideo = get_date_for_most_recent_by_camera_media_file(blink)
+	downloaded = 0
 	
 	for page in range(1, HARD_PAGE_LIMIT):
 		response = request_videos(blink, time=since_epochs, page=page)
 		try:
 			result = response["media"]
 			for item in result:
-				for item in result:
-					try:
-						created_at = item["created_at"]
-						camera_name = item["device_name"]
-						is_deleted = item["deleted"]
-						address = item["media"]
-					except KeyError:
-						continue
-		            if not mostRecentVideo[camera_name]["has_been_updated"]:
-						if mostRecentVideo[camera_name]["created_at"] < created_at:	
-				            clip_address = f"{blink.urls.base_url}{address}"
-				            filename = f"{camera_name}.mp4"
-				            filename = os.path.join(path, filename)
-			                response = api.http_get(
-			                    self,
-			                    url=clip_address,
-			                    stream=True,
-			                    json=False,
-			                    timeout=TIMEOUT_MEDIA,
-			                )
-			                with open(filename, "wb") as vidfile:
-			                    copyfileobj(response.raw, vidfile			
+				try:
+					created_at = item["created_at"]
+					camera_name = item["device_name"]
+					is_deleted = item["deleted"]
+					address = item["media"]
+				except KeyError:
+					continue
+				if parse(created_at, fuzzy=True).timestamp() > parse(mostRecentVideo[camera_name], fuzzy=True).timestamp():
+					mostRecentVideo[camera_name] = created_at
+					print('Downloading')
+					clip_address = f"{blink.urls.base_url}{address}"
+					filename = f"{camera_name}+{created_at}.mp4"
+					filename = os.path.join(path, filename)
+					response = http_get(
+					blink,
+					url=clip_address,
+					stream=True,
+					json=False,
+					timeout=TIMEOUT_MEDIA,
+					)
+					with open(filename, "wb") as vidfile:
+						copyfileobj(response.raw, vidfile)
+					downloaded+=1
+
+				else:
+					print("Skipping")
+			if downloaded == len(mostRecentVideo):
+				break
+					
+
+		except RuntimeError:
+			continue			
 			
 
 
@@ -63,10 +90,6 @@ if exists(AUTHFILE):
 	auth = Auth(json_load(AUTHFILE))
 	blink.auth = auth
 blink.start()
-blink.save("./auth")
-
-for name, camera in blink.cameras.items():
-	mostRecentVideo["name"] = {"created_at":0, "has_been_updated":False}
+blink.save(AUTHFILE)
 
 download_latest_videos(blink, TMP_PATH)
-	
